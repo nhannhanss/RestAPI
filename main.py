@@ -7,6 +7,7 @@ Cách dùng: python fetch_tiki_simple.py
 """
 
 import json
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,7 +18,9 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-# ── Cấu hình ──────────────────────────────────────────────
+
+
+# ── Cấu hình  ────────────────────────────────
 INPUT_CSV         = "products-0-200000.csv"
 OUTPUT_DIR        = Path("output_json")
 PRODUCTS_PER_FILE = 1000
@@ -26,11 +29,6 @@ TIMEOUT           = 15      # Giây timeout mỗi request
 MAX_RETRIES       = 3
 
 API_URL = "https://api.tiki.vn/product-detail/api/v1/products/{}"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json",
-    "Referer": "https://tiki.vn/",
-}
 # ──────────────────────────────────────────────────────────
 
 
@@ -53,7 +51,7 @@ def fetch_one(product_id: str) -> tuple[str, dict | None, str | None]:
     """Fetch 1 sản phẩm. Trả về (id, data, error)."""
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            r = requests.get(API_URL.format(product_id), headers=HEADERS, timeout=TIMEOUT)
+            r = requests.get(API_URL.format(product_id), timeout=TIMEOUT)
 
             if r.status_code == 200:
                 raw = r.json()
@@ -106,13 +104,17 @@ def main():
     all_ids = df[id_col].dropna().unique().tolist()
     print(f"Tổng số sản phẩm: {len(all_ids):,}")
 
-    # ── Resume: bỏ qua ID đã có trong output ──
+    # ── Resume: bỏ qua ID đã fetch thành công hoặc đã lỗi ──
     done_ids = set()
     for f in OUTPUT_DIR.glob("products_batch_*.json"):
         for p in json.loads(f.read_text(encoding="utf-8")):
             done_ids.add(str(p["id"]))
+    if error_file.exists():
+        for line in error_file.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                done_ids.add(str(json.loads(line)["product_id"]))
     remaining = [pid for pid in all_ids if pid not in done_ids]
-    print(f"Còn lại cần fetch: {len(remaining):,}\n")
+    print(f"Đã xử lý: {len(done_ids):,} | Còn lại: {len(remaining):,}\n")
 
     # ── Fetch song song ──
     batch, batch_idx = [], len(list(OUTPUT_DIR.glob("products_batch_*.json")))
@@ -135,6 +137,7 @@ def main():
                         batch = []
                 else:
                     error += 1
+                    print(f"  ✗ [{i:,}] id={pid} | {err}")
                     err_fh.write(json.dumps({
                         "product_id": pid,
                         "error": err,
@@ -142,12 +145,17 @@ def main():
                     }, ensure_ascii=False) + "\n")
                     err_fh.flush()
 
-                # Progress mỗi 500 sản phẩm
+                # Progress + lưu batch dở mỗi 500 sản phẩm
                 if i % 500 == 0:
                     elapsed = time.time() - start
                     rate = i / elapsed
                     eta = (len(remaining) - i) / rate / 60
                     print(f"[{i:,}/{len(remaining):,}] ✓{success:,} ✗{error:,} | {rate:.1f} req/s | ETA {eta:.0f} phút")
+                    # Lưu batch dở phòng khi bị ngắt
+                    if batch:
+                        save_batch(batch, batch_idx)
+                        batch = []
+                        batch_idx += 1
 
     # Lưu batch cuối
     if batch:
@@ -161,4 +169,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nĐã dừng. Data đã fetch được vẫn được lưu lại.")
