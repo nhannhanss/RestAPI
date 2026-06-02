@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-Tiki Product Fetcher - Phiên bản đơn giản
-==========================================
-Cài đặt: pip install requests pandas beautifulsoup4 lxml
-Cách dùng: python fetch_tiki_simple.py
-"""
-
 import json
 import os
 import re
